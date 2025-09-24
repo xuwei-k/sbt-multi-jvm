@@ -4,7 +4,8 @@
 
 package com.typesafe.sbt
 
-import com.typesafe.sbt.multijvm.{ Jvm, JvmLogger }
+import xsbti.FileConverter
+import com.typesafe.sbt.multijvm.{ Jvm, JvmLogger, TestsOutput }
 import sbt.*
 import Keys.*
 import java.io.File
@@ -30,45 +31,64 @@ object MultiJvmPlugin extends AutoPlugin {
 
     lazy val multiJvmMarker = SettingKey[String]("multi-jvm-marker")
 
+    @transient
     lazy val multiJvmTests = TaskKey[Map[String, Seq[String]]]("multi-jvm-tests")
+    @transient
     lazy val multiJvmTestNames = TaskKey[Seq[String]]("multi-jvm-test-names")
 
+    @transient
     lazy val multiJvmApps = TaskKey[Map[String, Seq[String]]]("multi-jvm-apps")
+    @transient
     lazy val multiJvmAppNames = TaskKey[Seq[String]]("multi-jvm-app-names")
 
+    @transient
     lazy val multiJvmJavaCommand = TaskKey[File]("multi-jvm-java-command")
 
+    @transient
     lazy val jvmOptions = TaskKey[Seq[String]]("jvm-options") // TODO: shouldn't that be regular `javaOptions`?
     lazy val extraOptions = SettingKey[String => Seq[String]]("extra-options")
+    @transient
     lazy val multiJvmCreateLogger = TaskKey[String => Logger]("multi-jvm-create-logger")
 
     lazy val scalatestRunner = SettingKey[String]("scalatest-runner")
     lazy val scalatestOptions = SettingKey[Seq[String]]("scalatest-options")
+    @transient
     lazy val scalatestClasspath = TaskKey[Classpath]("scalatest-classpath")
+    @transient
     lazy val scalatestScalaOptions = TaskKey[String => Seq[String]]("scalatest-scala-options")
+    @transient
     lazy val scalatestMultiNodeScalaOptions = TaskKey[String => Seq[String]]("scalatest-multi-node-scala-options")
+    @transient
     lazy val multiTestOptions = TaskKey[Options]("multi-test-options")
+    @transient
     lazy val multiNodeTestOptions = TaskKey[Options]("multi-node-test-options")
 
+    @transient
     lazy val appScalaOptions = TaskKey[String => Seq[String]]("app-scala-options")
+    @transient
     lazy val multiRunOptions = TaskKey[Options]("multi-run-options")
 
     lazy val multiRunCopiedClassLocation = SettingKey[File]("multi-run-copied-class-location")
 
+    @transient
     lazy val multiJvmTestJar = TaskKey[String]("multi-jvm-test-jar")
+    @transient
     lazy val multiJvmTestJarName = TaskKey[String]("multi-jvm-test-jar-name")
 
+    @transient
     lazy val multiNodeTest = TaskKey[Unit]("multi-node-test")
-    lazy val multiNodeExecuteTests = TaskKey[Tests.Output]("multi-node-execute-tests")
+    lazy val multiNodeExecuteTests = TaskKey[TestsOutput]("multi-node-execute-tests")
     lazy val multiNodeTestOnly = InputKey[Unit]("multi-node-test-only")
 
     lazy val multiNodeHosts = SettingKey[Seq[String]]("multi-node-hosts")
     lazy val multiNodeHostsFileName = SettingKey[String]("multi-node-hosts-file-name")
+    @transient
     lazy val multiNodeProcessedHosts = TaskKey[(IndexedSeq[String], IndexedSeq[String])]("multi-node-processed-hosts")
     lazy val multiNodeTargetDirName = SettingKey[String]("multi-node-target-dir-name")
     lazy val multiNodeJavaName = SettingKey[String]("multi-node-java-name")
 
     // TODO fugly workaround for now
+    @transient
     lazy val multiNodeWorkAround =
       TaskKey[(String, (IndexedSeq[String], IndexedSeq[String]), String)]("multi-node-workaround")
   }
@@ -89,7 +109,7 @@ object MultiJvmPlugin extends AutoPlugin {
     inConfig(MultiJvm)(Defaults.configSettings ++ internalMultiJvmSettings)
 
   // https://github.com/sbt/sbt/blob/v0.13.15/main/actions/src/main/scala/sbt/Tests.scala#L296-L298
-  private[this] def showResults(log: Logger, results: Tests.Output, noTestsMessage: => String): Unit =
+  private[this] def showResults(log: Logger, results: TestsOutput, noTestsMessage: => String): Unit =
     TestResultLogger.Default
       .copy(printNoTests = TestResultLogger.const(_ info noTestsMessage))
       .run(log, results, "")
@@ -110,16 +130,19 @@ object MultiJvmPlugin extends AutoPlugin {
     scalatestOptions := defaultScalatestOptions,
     scalatestClasspath := managedClasspath.value.filter(_.data.name.contains("scalatest")),
     multiRunCopiedClassLocation := new File(target.value, "multi-run-copied-libraries"),
-    scalatestScalaOptions := scalaOptionsForScalatest(
-      scalatestRunner.value,
-      scalatestOptions.value,
-      fullClasspath.value,
-      multiRunCopiedClassLocation.value
-    ),
+    scalatestScalaOptions := {
+      implicit val converter: FileConverter = fileConverter.value
+      scalaOptionsForScalatest(
+        scalatestRunner.value,
+        scalatestOptions.value,
+        fullClasspath.value,
+        multiRunCopiedClassLocation.value
+      )
+    },
     scalatestMultiNodeScalaOptions := scalaMultiNodeOptionsForScalatest(scalatestRunner.value, scalatestOptions.value),
     multiTestOptions := Options(jvmOptions.value, extraOptions.value, scalatestScalaOptions.value),
     multiNodeTestOptions := Options(jvmOptions.value, extraOptions.value, scalatestMultiNodeScalaOptions.value),
-    appScalaOptions := scalaOptionsForApps(fullClasspath.value),
+    appScalaOptions := scalaOptionsForApps(fullClasspath.value)(using fileConverter.value),
     connectInput := true,
     multiRunOptions := Options(jvmOptions.value, extraOptions.value, appScalaOptions.value),
     executeTests := multiJvmExecuteTests.value,
@@ -132,7 +155,7 @@ object MultiJvmPlugin extends AutoPlugin {
     multiJvmTestJar := (assembly / assemblyOutputPath).map(_.getAbsolutePath).dependsOn(assembly).value,
     multiJvmTestJarName := (assembly / assemblyOutputPath).value.getAbsolutePath,
     multiNodeTest := {
-      implicit val display = Project.showContextKey(state.value)
+      implicit val display: Show[ScopedKey[?]] = Project.showContextKey(state.value)
       showResults(streams.value.log, multiNodeExecuteTests.value, noTestsMessage(resolvedScoped.value))
     },
     multiNodeExecuteTests := multiNodeExecuteTestsTask.value,
@@ -152,7 +175,7 @@ object MultiJvmPlugin extends AutoPlugin {
 
     // here follows the assembly parts of the config
     // don't run the tests when creating the assembly
-    assembly / test := {},
+    assembly / test := TestResult.Passed,
 
     // we want everything including the tests and test frameworks
     assembly / fullClasspath := (MultiJvm / fullClasspath).value,
@@ -197,10 +220,11 @@ object MultiJvmPlugin extends AutoPlugin {
       options: Seq[String],
       fullClasspath: Classpath,
       multiRunCopiedClassDir: File
-  ): String => Seq[String] = {
+  )(implicit converter: FileConverter): String => Seq[String] = {
     val directoryBasedClasspathEntries = fullClasspath.files.filter(_.isDirectory)
     // Copy over just the jars to this folder.
     fullClasspath.files
+      .map(_.toFile)
       .filter(_.isFile)
       .foreach(classpathFile =>
         IO.copyFile(classpathFile, new File(multiRunCopiedClassDir, classpathFile.getName), true)
@@ -215,12 +239,12 @@ object MultiJvmPlugin extends AutoPlugin {
       { Seq(runner, "-s", testClass) ++ options }
   }
 
-  def scalaOptionsForApps(classpath: Classpath): String => Seq[String] = {
+  def scalaOptionsForApps(classpath: Classpath)(implicit converter: FileConverter): String => Seq[String] = {
     val cp = classpath.files.absString
     (mainClass: String) => Seq("-cp", cp, mainClass)
   }
 
-  lazy val multiJvmExecuteTests: Def.Initialize[sbt.Task[Tests.Output]] = Def.task {
+  lazy val multiJvmExecuteTests: Def.Initialize[sbt.Task[TestsOutput]] = Def.task {
     runMultiJvmTests(
       multiJvmTests.value,
       multiJvmMarker.value,
@@ -240,7 +264,7 @@ object MultiJvmPlugin extends AutoPlugin {
       val options = multiTestOptions.value
       val opts = options.copy(extra = (s: String) => { options.extra(s) ++ _extraOptions })
       val filters = selection.map(GlobFilter(_))
-      val tests = multiJvmTests.value.filterKeys(name => filters.exists(_.accept(name)))
+      val tests = multiJvmTests.value.filter { case (name, _) => filters.exists(_.accept(name)) }
       Def.task {
         val results = runMultiJvmTests(
           tests,
@@ -264,7 +288,7 @@ object MultiJvmPlugin extends AutoPlugin {
       srcDir: File,
       createLogger: String => Logger,
       log: Logger
-  ): Tests.Output = {
+  ): TestsOutput = {
     val results =
       if (tests.isEmpty)
         List()
@@ -272,9 +296,8 @@ object MultiJvmPlugin extends AutoPlugin {
         tests.map { case (_name, classes) =>
           multi(_name, classes, marker, javaBin, options, srcDir, input = false, createLogger, log)
         }
-    Tests.Output(
+    TestsOutput(
       Tests.overall(results.map { case (_, testResult) => testResult }),
-      Map.empty,
       results.map { case (testClass, _) => Tests.Summary("multi-jvm", testClass) }
     )
   }
@@ -325,7 +348,7 @@ object MultiJvmPlugin extends AutoPlugin {
       val className = multiSimpleName(testClass)
       val jvmName = "JVM-" + (index + 1) + "-" + className
       val jvmLogger = createLogger(jvmName)
-      val optionsFile = (srcDir ** (className + ".opts")).get.headOption
+      val optionsFile = (srcDir ** (className + ".opts")).get().headOption
       val optionsFromFile =
         optionsFile map (IO.read(_)) map (_.trim.replace("\\n", " ").split("\\s+").toList) getOrElse Seq.empty[String]
       val multiNodeOptions = getMultiNodeCommandLineOptions(hosts, index, classes.size)
@@ -351,7 +374,7 @@ object MultiJvmPlugin extends AutoPlugin {
     (name, if (failures.nonEmpty) TestResult.Failed else TestResult.Passed)
   }
 
-  lazy val multiNodeExecuteTestsTask: Def.Initialize[sbt.Task[Tests.Output]] = Def.task {
+  lazy val multiNodeExecuteTestsTask: Def.Initialize[sbt.Task[TestsOutput]] = Def.task {
     val (_jarName, (hostsAndUsers, javas), targetDir) = multiNodeWorkAround.value
     runMultiNodeTests(
       multiJvmTests.value,
@@ -408,7 +431,7 @@ object MultiJvmPlugin extends AutoPlugin {
       targetDir: String,
       createLogger: String => Logger,
       log: Logger
-  ): Tests.Output = {
+  ): TestsOutput = {
     val results =
       if (tests.isEmpty)
         List()
@@ -430,9 +453,8 @@ object MultiJvmPlugin extends AutoPlugin {
             log
           )
         }
-    Tests.Output(
+    TestsOutput(
       Tests.overall(results.map { case (_, testResult) => testResult }),
-      Map.empty,
       results.map { case (testClass, _) => Tests.Summary("multi-jvm", testClass) }
     )
   }
@@ -465,7 +487,7 @@ object MultiJvmPlugin extends AutoPlugin {
         val jvmName = "JVM-" + (index + 1)
         val jvmLogger = createLogger(jvmName)
         val className = multiSimpleName(testClass)
-        val optionsFile = (srcDir ** (className + ".opts")).get.headOption
+        val optionsFile = (srcDir ** (className + ".opts")).get().headOption
         val optionsFromFile =
           optionsFile map (IO.read(_)) map (_.trim.replace("\\n", " ").split("\\s+").toList) getOrElse Seq
             .empty[String]
@@ -552,6 +574,6 @@ object MultiJvmPlugin extends AutoPlugin {
     theHosts.map { x =>
       val elems = x.split(":").toList.take(2).padTo(2, defaultJava)
       (elems(0), elems(1))
-    } unzip
+    }.unzip
   }
 }

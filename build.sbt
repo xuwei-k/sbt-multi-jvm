@@ -11,13 +11,14 @@ Global / onLoad := (Global / onLoad).value.andThen { s =>
 
 lazy val scala212 = "2.12.20"
 ThisBuild / crossScalaVersions := Seq(scala212)
-ThisBuild / scalaVersion := scala212
+ThisBuild / scalaVersion := "3.7.3"
 organization := "com.github.sbt"
 name := "sbt-multi-jvm"
 enablePlugins(SbtPlugin)
 pluginCrossBuild / sbtVersion := {
   scalaBinaryVersion.value match {
     case "2.12" => "1.9.7" // set minimum sbt version
+    case "3" => "2.0.0-RC5"
   }
 }
 
@@ -32,11 +33,8 @@ libraryDependencies += Defaults.sbtPluginExtra(
 scalacOptions ++= List(
   "-unchecked",
   "-deprecation",
-  "-language:_",
   "-encoding",
   "UTF-8",
-  "-opt-inline-from:<sources>",
-  "-opt:l:inline"
 )
 
 // publish settings
